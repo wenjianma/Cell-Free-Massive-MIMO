@@ -1,0 +1,40 @@
+% Function to calculate the precoder using Maximum Ratio (MR) and 
+% Regulated Zero Forcing (RZF)
+
+% Input parameters:
+% Hhat = Estimated channel matrix.
+%power              =  Uplink transmit power per UE
+%numRealizations    =  Number of channel realizations
+%numAntennas        =  Number of antennas per Access Point
+%numUEs             =  Number of User Equipments per cell
+%numAPs             =  Number of Access Points
+
+% Output parameters:
+% w_MR = Precoded MR vector. 
+% w_RZF = Precoded RZF vector. 
+
+function [w_MR,w_RZF] = MR_ZRF_Precoder(Hhat,power,numRealizations,numAntennas,numUEs,numAPs)
+
+    % Prepare to store results through initilization
+    % w_MR = zeros(numAntennas,numUEs,numAPs);
+    % w_RZF = zeros(numAntennas,numUEs,numAPs);
+
+    % Store identity matrix of size numAntennas x numAntennas
+    identityMatrix = eye(numAntennas);
+
+    % Normalizing the precoder
+    
+
+        %Calculation of the Vector
+    v_MR = Hhat(:,:,:,:);
+    
+    v_RZF = (((power*v_MR.*pagectranspose(v_MR))+identityMatrix)*(-1)).*v_MR;
+
+    % Calculating Normalizer Precoded Vector
+    w_MR = v_MR ./ pagenorm(v_MR);
+    w_RZF = v_RZF ./ pagenorm(v_RZF);
+
+
+%        w_MR = reshape(w_MR,[],numUEs,numAPs);
+%        w_RZF = reshape(w_RZF,[],numUEs,numAPs);
+end
