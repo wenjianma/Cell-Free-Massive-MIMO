@@ -1,0 +1,213 @@
+%% Communication System Design -- Project Gyros
+% This code is about the general setup of cell-free massive MIMO networks
+%% General Setup
+
+% number of repetition, it represents how many times we are going to run our simulator
+% this is important because the channel is random variable and we want different random seeds each time
+number_of_repetition = 1; 
+
+% number of Access Points in our simulator
+number_of_APs = 16;
+% Possible value: 16 APs 
+
+% number of antennas per AP
+antennas_per_AP = 4; 
+
+% number of User Equipments in our simulator
+number_of_UEs = 100;
+
+%Length of pilot sequences
+Length_of_pilot = 10;
+
+%%Size of the coverage area (as a square with wrap-around)
+squareLength = 2000; %meter
+%% Propagation Model
+
+% total bandwidth & number of channels
+total_bandwidth = 20e6;  % 20MHz
+number_of_channels = 1000;
+
+% channel bandwidth per setup
+channel_bandwidth = total_bandwidth/number_of_channels;
+
+%Total downlink transmit power per AP (mW)
+downlink_transmit_power = 100;
+
+%Noise figure (in dB)
+noise_figure = 7;
+%Compute noise power
+noiseVariancedBm = -174 + 10*log10(total_bandwidth) + noise_figure;  
+% -174 dBm is the thermal noise (boltzmann constant * temperature, room
+% temp)
+%noise figure is a typical noise at the receiver
+% bandwidth term is to calculate the noise power over our bandwidth
+% noise part -> study the theory of no.5 ref
+
+%Pathloss exponent
+pathloss_exponent = 3.76; 
+
+%Standard deviation of shadow fading
+sigma_shadow_fading = 10;
+
+%Average channel gain in dB at a reference distance of 1 meter. Note that
+%-35.3 dB corresponds to -148.1 dB at 1 km, using pathloss exponent 3.76
+constantTerm = -35.3;
+
+%Define the antenna spacing (in number of wavelengths)
+antenna_spacing = 1/2; %Half wavelength distance
+
+%Angular standard deviation around the nominal angle (measured in degrees)
+ASDdeg = 20;
+
+%Set threshold for when a non-master AP decides to serve a UE
+threshold = -40; %dB
+% do not need it if we don't need to do handover 
+% in our case, we don't need this parameter
+
+%% Initialize matrices for storing results
+distances = zeros(number_of_APs,number_of_UEs,number_of_repetition); %save distances of UE to AP
+whichpos_tot = zeros(number_of_APs,number_of_UEs,number_of_repetition);%save index of "cell" area with min distance
+channel_gainOverNoisedB = zeros(number_of_APs,number_of_UEs,number_of_repetition); %save channel gain in dB
+channel_gainOverNoise = zeros(number_of_APs,number_of_UEs,number_of_repetition); %save channel gain in linear scale
+R = zeros(antennas_per_AP,antennas_per_AP,number_of_APs,number_of_UEs,number_of_repetition);
+
+%% Go through all the repetitions
+for current_repetition = 1:number_of_repetition
+    % During simulation, the locations of APs should be changed. The
+    % locations of UEs can be changed but we need to make sure two
+    % algorithms have the same UE distribution. We can use "the same seed"
+    % to control it.
+
+    % The distribution of AP can be grid distribution (in this case, sqrt(number of AP) should be integer)
+    M = round(sqrt(number_of_APs)); % how many APs per row/column 
+    D = squareLength/(M+1);% the distance between two neighbor AP
+    [x,y]= meshgrid(D:D:squareLength-D,D:D:squareLength-D);
+    APpositions = (x+rand(M,M)*D/2) + 1i*(y+rand(M,M)*D/2); % add randomness to the grid distribution, maximized randomness equals to D/2
+    APpositions = APpositions(:); %convert 10*10 matrix AP to 100*1 vector  
+    % figure(1)
+    % scatter(real(APpositions), imag(APpositions));
+
+    % Random AP locations with uniform distribution
+    % APpositions = (rand(number_of_APs,1) + 1i*rand(number_of_APs,1)) * squareLength;
+    % figure(1)
+    % scatter(real(APpositions), imag(APpositions));
+   
+    
+    % Random UE locations with uniform distribution
+    UEpositions = (rand(number_of_UEs,1) + 1i*rand(number_of_UEs,1)) * squareLength;
+    % scatter(real(UEpositions), imag(UEpositions));
+    
+    %Compute alternative AP locations by using wrap around 
+    wrapHorizontal = repmat([-squareLength 0 squareLength],[3 1]);
+    wrapVertical = wrapHorizontal';
+    wrapLocations = wrapHorizontal(:)' + 1i*wrapVertical(:)';
+    APpositionsWrapped = repmat(APpositions,[1 length(wrapLocations)]) + repmat(wrapLocations,[number_of_APs 1]);
+    % scatter(real(APpositionsWrapped), imag(APpositionsWrapped))
+    figure(2)
+    scatter(real(APpositionsWrapped), imag(APpositionsWrapped),'DisplayName','APs')
+    hold on;
+    scatter(real(UEpositions),imag(UEpositions),"filled",'DisplayName','UEs')
+    legend
+    xlabel('Area - X (m)')
+    ylabel('Area - Y (m)')
+    %Basically, what wrap around algorithm does here is to expand the
+    %orginial AP distribution to 9 larger area
+
+    %Compute distances assuming that the APs are at the same height with
+    %UE.
+    for current_UE = 1:number_of_UEs
+        %replicate the position of the UE under study so that the
+        %APpositionsWrapped matrix and the UEPositionWrapped matrix are of
+        %the same size. 
+        UEPositionWrapped = repmat(UEpositions(current_UE),size(APpositionsWrapped)); 
+
+        %calculate the minimum absolute distance between the current UE and
+        %all of the APs (in wrap around area).
+        %min(..., [], 2) calculates the minimum value along the second dimension (columns). 
+        [distancetoUE,whichpos] = min(abs(APpositionsWrapped - UEPositionWrapped),[],2); 
+        distances(:,current_UE,current_repetition) = distancetoUE;
+
+        %save the number of the "cell" (=expanded area, for wrap around method) where the minimum distance from UE to AP is found.
+        whichpos_tot(:,current_UE,current_repetition) = whichpos; 
+
+        %now we need to determine the channel gain based on the large scale
+        %parameters in dB and in linear scale
+        %channel gain is parameter βkl in book
+        channel_gainOverNoisedB(:,current_UE,current_repetition) = constantTerm - pathloss_exponent*10*log10(distances(:,current_UE,current_repetition)) + sigma_shadow_fading*randn(size(distances(:,current_UE,current_repetition))) - noiseVariancedBm;
+        channel_gainOverNoise(:,current_UE,current_repetition) = db2pow(channel_gainOverNoisedB(:,current_UE, current_repetition));
+
+        %calculate small-scale parameters, i.e., normalized R matrix (spatial
+        %correlation matrix) for all of the APs! 
+        %normalized R matrix = channel_gain*R 
+        % we are calculating R between AP l (current AP) and UE k (current
+        % UE)
+
+        %%------NOTE: Maybe here we need a flag or something to distinguish
+        %%betwen uncorrealted and correlated Rayleigh fading cases.
+
+        % for uncorrelated rayleigh fading R = identity matrix
+        for current_AP = 1:number_of_APs
+            R(:,:,current_AP,current_UE,current_repetition) = channel_gainOverNoise(current_AP,current_UE,current_repetition)*eye(antennas_per_AP);
+        end 
+
+        % for correlated rayleigh fading we need to calculate it based on
+        % eq. (2.18-2.19) from Reference 1 (Book on cell free massive mimo)
+
+        % In this case we need to take into consideration the nominal angle θ from the UE to the AP. 
+
+        %since we have calculated the minimum distance from each UE to AP,
+        %we can used those indexes to calculate the phase angle between
+        %these two cartesian coordinates by doing the following:
+
+        %---NOTE: in final stage, we need to merge the following loop with
+        %the uncorrelated rayleigh fading loop
+        for current_AP = 1:number_of_APs
+            thetaAPtoUE = angle(UEpositions(current_UE)-APpositionsWrapped(current_AP,whichpos(current_AP)));
+            %we don't need to save this angle, but we are going to use it
+            %in the calculation of R.
+        end 
+
+    end
+   
+
+    
+   % random     
+
+    % connectivity bettween UE and AP
+    % for current_AP = 1:number_of_APs
+    % 
+    %     for t = 1:Length_of_pilot
+    % 
+    %         pilotUEs = find(t==pilotIndex(:,current_repetition)); % find the place where we put the pilot
+    % 
+    %          if sum(D(current_AP,pilotUEs,current_repetition)) == 0 %If the AP is not a master AP
+    %             %Find the UE with pilot t with the best channel
+    %             [gainValue,UEindex] = max(gainOverNoisedB(current_AP,pilotUEs,current_repetition));
+    % 
+    %             % not sure about whether it is needed in our project:
+    %             % %Serve this UE if the channel is at most "threshold" weaker
+    %             % %than the master AP's channel
+    %             % %[gainValue gainOverNoisedB(masterAPs(pilotUEs(UEindex)),pilotUEs(UEindex),n)]   
+    %             % if gainValue - gainOverNoisedB(masterAPs(pilotUEs(UEindex)),pilotUEs(UEindex),n) >= threshold
+    %             %     D(l,pilotUEs(UEindex),n) = 1;
+    %             % end
+    % 
+    %          end
+    %     end
+    % 
+    % end
+
+ end
+
+
+
+
+
+
+
+
+
+
+
+
+
